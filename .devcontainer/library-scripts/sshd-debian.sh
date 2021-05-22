@@ -84,34 +84,8 @@ sed -i -E "s/#*\s*Port\s+.+/Port ${SSHD_PORT}/g" /etc/ssh/sshd_config
 # Write out a script that can be referenced as an ENTRYPOINT to auto-start sshd
 tee /usr/local/share/ssh-init.sh > /dev/null \
 << 'EOF'
-#!/usr/bin/env bash
-set -e 
-
-sudoIf()
-{
-    if [ "$(id -u)" -ne 0 ]; then
-        sudo "$@"
-    else
-        "$@"
-    fi
-}
-
-# The files created here are used by /etc/profile.d/00-fix-login-env.sh.
-sudoIf mkdir -p /usr/local/etc/vscode-dev-containers
-declare -x | grep -vE '(USER|HOME|SHELL|PWD|OLDPWD|TERM|TERM_PROGRAM|TERM_PROGRAM_VERSION|SHLVL|HOSTNAME|LOGNAME|MAIL)=' | grep -oP '(declare\s+-x\s+)?\K.*=.*' | sudoIf tee /usr/local/etc/vscode-dev-containers/base-env > /dev/null
-
-# Start SSH server
-sudoIf /etc/init.d/ssh start 2>&1 | sudoIf tee /tmp/sshd.log > /dev/null
-
-set +e
-exec "$@"
-EOF
-chmod +x /usr/local/share/ssh-init.sh
-
-# Write out a script to ensure login shells get variables or the PATH that were set in the container image
-SH_RESTORE_ENV_SCRIPT="$(cat << 'EOF'
 #!/bin/sh
-# This script is intended to be sourced, so it uses posix syntax where possible and detects zsh for cases where things differ
+# This script is intended to be sourced, so it uses posix syntax where possible and detects zsh/sh for cases where things differ
 
 if [ "${VSCDC_FIX_LOGIN_ENV}" = "true" ]; then
     # Already run, so exit
@@ -120,13 +94,15 @@ fi
 
 export VSCDC_FIX_LOGIN_ENV=true
 
+# Get the type of shell without relying on $SHELL which can be empty/wrong
 __vscdc_shell_type="$(lsof -p $$ | awk '(NR==2) {print $1}')"
 
 __vscdc_var_has_val() {
+    # POSIX implementation uses eval, but that doesn't work in zsh and -v is better for bash
     if [ "${__vscdc_shell_type}" = "bash" ] || [ "${__vscdc_shell_type}" = "zsh" ]; then
         if [ -v "$1" ]; then return 0; else return 1; fi
     fi
-    if [ "$(eval "echo \$$1")" != "" ]; then return 0; else return 1; fi
+    if [ "$(eval "echo \$$1")" = "" ]; then return 1; else return 0; fi
 }
 
 __vscdc_restore_env() {
@@ -139,10 +115,10 @@ __vscdc_restore_env() {
     if [ -f /usr/local/etc/vscode-dev-containers/base-env ]; then
         base_env_vars="${base_env_vars}$(echo && cat /usr/local/etc/vscode-dev-containers/base-env)"
     fi
-    if __vscdc_var_has_val base_env_vars; then
+    if [ ! -z "${base_env_vars}" ]; then
         # Add any missing env vars saved off earlier
         local variable_line
-        echo "$base_env_vars" | while read variable_line; do
+        while IFS= read -r variable_line; do
             local var_name="${variable_line%%=*}"
             if [ "${var_name}" = "PATH" ]; then
                 local var_value="${variable_line##*=\"}"
@@ -152,33 +128,46 @@ __vscdc_restore_env() {
                 local var_value="${variable_line##*=\"}"
                 export ${var_name}="${var_value%?}"
             fi
-        done 
+        # Use EOF hac to treat var as file because <<< is not available in sh/dash/ash
+        done << EOF_BASE_ENV
+$base_env_vars
+EOF_BASE_ENV
     fi
 
     # Unlike other properties, the starting PATH can get set in a few different ways. Debian sets it in /etc/profile while Ubuntu 
     # takes it from /env/environment, both of which are a problem if the PATH was modified using the ENV directive in a Dockerfile.
-    if __vscdc_var_has_val base_shell_path && [ "$PATH" = "${PATH#*$base_shell_path}" ]; then
-        local clean_shell_path
+    if [ -z "${PATH}" ]; then
+        export PATH="${base_shell_path}"
+        return
+    fi
+    if [ "${PATH}" = "${base_shell_path}" ]; then
+        return
+    fi
+    if [ ! -z "${base_shell_path}" ] && [ "$PATH" = "${PATH#*$base_shell_path}" ]; then
         if [ "${__vscdc_shell_type}" = "zsh" ]; then
             # zsh always sources /etc/zsh/zshenv so getting a clean environment is simple and we just have to worry about /etc/environment
-            clean_shell_path="$(env -i - PATH="$(PATH=""; . /etc/environment; echo "$PATH" 2>/dev/null)" /usr/bin/zsh --no-globalrcs --no-rcs -c 'echo $PATH' 2>/dev/null)"
+            local clean_shell_path="$(env -i - PATH="$(PATH=""; . /etc/environment; echo "$PATH" 2>/dev/null)" /usr/bin/zsh --no-globalrcs --no-rcs -c 'echo $PATH' 2>/dev/null)"
+            export PATH="${PATH/$clean_shell_path/$base_shell_path}"
         else 
             # If we're in a situation where we've got a fresh environment, replace this shell's base path with the image base path. First,
             # find true base path - Debian hard codes it in /etc/profile while Ubuntu gets it from /etc/environment, so its a bit tricky to get.
             # Since the true base path can vary by user (particularly for Debian), we need to figure it out here instead of up-front.
             if [ ! -f /tmp/clean-profile ]; then
                 cp /etc/profile /tmp/clean-profile
-                sed -i 's/\/etc\/profile\.d/\/tmp\/ignore-me.d/g' /tmp/clean-profile
-                sed -i 's/\/etc\/bash\.bashrc/\/tmp\/noop.sh/g' /tmp/clean-profile
+                sed -i 's%/etc/profile\.d%/tmp/ignore-me.d%g;s%/etc/bash\.bashrc%/tmp/noop.sh%g' /tmp/clean-profile
             fi
             mkdir -p /tmp/ignore-me.d
             touch /tmp/noop.sh
-            clean_shell_path="$(env -i - BASH="" PS1="" /bin/bash --noprofile --norc -c '. /tmp/clean-profile; echo $PATH' 2>/dev/null)"
-            # Escape the path for bash/sh
-            clean_shell_path="${clean_shell_path//\//\\\/}"
+            local clean_shell_path="$(env -i - BASH="" PS1="" /bin/bash --noprofile --norc -c '. /tmp/clean-profile; echo $PATH' 2>/dev/null)"
+            # Use variable expansion for bash, awk for sh
+            if [ "${__vscdc_shell_type}" = "bash" ]; then
+                export PATH="${PATH/${clean_shell_path//\//\\\/}/$base_shell_path}"
+            else
+                # Escape sed's basic regex chars along with % that we use instead of / in next line - https://www.gnu.org/software/sed/manual/html_node/BRE-syntax.html
+                clean_shell_path="$(echo "$clean_shell_path" | sed 's/[]{}?()\\%$*+.^[]/\\&/g')"
+                export PATH="$(echo "$PATH" | sed "s%$clean_shell_path%$base_shell_path%")"
+            fi
         fi
-        # Replace it if it exists in the path with the base_shell_path saved off earlier
-        export PATH="${PATH/$clean_shell_path/$base_shell_path}"
     fi
 }
 __vscdc_restore_env

@@ -4,7 +4,7 @@
 		"dockerfile": "Dockerfile",
 		"args": { 
 			"VARIANT": "focal",
-			"SHELL_TYPE": "zsh"
+			"SHELL_TYPE": "sh"
 		}
 	},
 
