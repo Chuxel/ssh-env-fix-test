@@ -77,13 +77,39 @@ fi
 
 # Setup sshd
 mkdir -p /var/run/sshd
-sed -i 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' /etc/pam.d/sshd
+sed -i 's/session\s*required\s*pam_loginuid\.so/ession optional pam_loginuid.so/g' /etc/pam.d/sshd
 sed -i 's/#*PermitRootLogin prohibit-password/PermitRootLogin yes/g' /etc/ssh/sshd_config
 sed -i -E "s/#*\s*Port\s+.+/Port ${SSHD_PORT}/g" /etc/ssh/sshd_config
 
 # Write out a script that can be referenced as an ENTRYPOINT to auto-start sshd
 tee /usr/local/share/ssh-init.sh > /dev/null \
 << 'EOF'
+#!/usr/bin/env bash
+set -e 
+
+sudoIf()
+{
+    if [ "$(id -u)" -ne 0 ]; then
+        sudo "$@"
+    else
+        "$@"
+    fi
+}
+
+# The files created here are used by /etc/profile.d/00-fix-login-env.sh.
+sudoIf mkdir -p /usr/local/etc/vscode-dev-containers
+declare -x | grep -vE '(USER|HOME|SHELL|PWD|OLDPWD|TERM|TERM_PROGRAM|TERM_PROGRAM_VERSION|SHLVL|HOSTNAME|LOGNAME|MAIL)=' | grep -oP '(declare\s+-x\s+)?\K.*=.*' | sudoIf tee /usr/local/etc/vscode-dev-containers/base-env > /dev/null
+
+# Start SSH server
+sudoIf /etc/init.d/ssh start 2>&1 | sudoIf tee /tmp/sshd.log > /dev/null
+
+set +e
+exec "$@"
+EOF
+chmod +x /usr/local/share/ssh-init.sh
+
+# Write out a script to ensure login shells get variables or the PATH that were set in the container image
+SH_RESTORE_ENV_SCRIPT="$(cat << 'EOF'
 #!/bin/sh
 # This script is intended to be sourced, so it uses posix syntax where possible and detects zsh/sh for cases where things differ
 
