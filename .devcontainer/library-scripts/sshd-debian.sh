@@ -119,6 +119,16 @@ if [ "${VSCDC_FIX_LOGIN_ENV}" = "true" ]; then
 fi
 
 export VSCDC_FIX_LOGIN_ENV=true
+
+__vscdc_shell_type="$(lsof -p $$ | awk '(NR==2) {print $1}')"
+
+__vscdc_var_has_val() {
+    if [ "${__vscdc_shell_type}" = "bash" ] || [ "${__vscdc_shell_type}" = "zsh" ]; then
+        if [ -v "$1" ]; then return 0; else return 1; fi
+    fi
+    if [ "$(eval "echo \$$1")" != "" ]; then return 0; else return 1; fi
+}
+
 __vscdc_restore_env() {
     local base_env_vars
     local base_shell_path
@@ -129,26 +139,27 @@ __vscdc_restore_env() {
     if [ -f /usr/local/etc/vscode-dev-containers/base-env ]; then
         base_env_vars="${base_env_vars}$(echo && cat /usr/local/etc/vscode-dev-containers/base-env)"
     fi
-    if [ -v base_env_vars ]; then
+    if __vscdc_var_has_val base_env_vars; then
         # Add any missing env vars saved off earlier
         local variable_line
-        while read variable_line; do
+        echo "$base_env_vars" | while read variable_line; do
             local var_name="${variable_line%%=*}"
             if [ "${var_name}" = "PATH" ]; then
                 local var_value="${variable_line##*=\"}"
                 base_shell_path="${var_value%?}"
-            elif [ "${var_name}" != "" ] && [ ! -v "${var_name}" ]; then
+            elif [ "${var_name}" != "" ] && ! __vscdc_var_has_val "${var_name}"; then
                 # All values are quoted, so get everything past the first quote and remove the last
                 local var_value="${variable_line##*=\"}"
                 export ${var_name}="${var_value%?}"
             fi
-        done <<< "$base_env_vars"
+        done 
     fi
+
     # Unlike other properties, the starting PATH can get set in a few different ways. Debian sets it in /etc/profile while Ubuntu 
     # takes it from /env/environment, both of which are a problem if the PATH was modified using the ENV directive in a Dockerfile.
-    if [ -v base_shell_path ] && [ "$PATH" = "${PATH#*$base_shell_path}" ]; then
+    if __vscdc_var_has_val base_shell_path && [ "$PATH" = "${PATH#*$base_shell_path}" ]; then
         local clean_shell_path
-        if [ "$(lsof -p $$ | awk '(NR==2) {print $1}')" = "zsh" ]; then
+        if [ "${__vscdc_shell_type}" = "zsh" ]; then
             # zsh always sources /etc/zsh/zshenv so getting a clean environment is simple and we just have to worry about /etc/environment
             clean_shell_path="$(env -i - PATH="$(PATH=""; . /etc/environment; echo "$PATH" 2>/dev/null)" /usr/bin/zsh --no-globalrcs --no-rcs -c 'echo $PATH' 2>/dev/null)"
         else 
@@ -171,9 +182,11 @@ __vscdc_restore_env() {
     fi
 }
 __vscdc_restore_env
-unset -f __vscdc_restore_env
+unset -f __vscdc_restore_env __vscdc_var_has_val
+unset __vscdc_shell_type
 EOF
 )"
+
 if [ "${FIX_ENVIRONMENT}" = "true" ]; then
     echo "${SH_RESTORE_ENV_SCRIPT}" > /etc/profile.d/00-fix-login-env.sh
     chmod +x /etc/profile.d/00-fix-login-env.sh

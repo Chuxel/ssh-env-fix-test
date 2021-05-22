@@ -8,9 +8,12 @@ ENV PATH=/frontbeforescript:$PATH:/backbeforeafterscript
 ENV this_var=true
 
 # Add any install commands to install.sh or user-install.sh or and they'll be added to the image 
-COPY install.sh library-scripts/*.sh /tmp/scripts/
-RUN ls /tmp/scripts/*.sh | xargs -n 1 bash \
-    && apt-get clean -y && rm -rf /var/lib/apt/lists/* /tmp/scripts/
+ARG SHELL_TYPE=bash
+COPY install.sh /tmp/scripts/
+COPY library-scripts/*.sh /tmp/library-scripts/
+RUN ls /tmp/library-scripts/*.sh | xargs -n 1 bash \
+    && bash /tmp/scripts/install.sh ${SHELL_TYPE} \
+    && apt-get clean -y && rm -rf /var/lib/apt/lists/* /tmp/library-scripts/ /tmp/scripts/
 
 ENV that_var=true
 ENV PATH=/frontafterscript:$PATH:/backafterscript
