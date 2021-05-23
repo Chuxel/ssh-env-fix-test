@@ -1,5 +1,5 @@
 {
-	"name": "Test Base",
+	"name": "Test SSH script",
 	"overrideCommand": false,
 	"forwardPorts": [2222],
 	"build": {
