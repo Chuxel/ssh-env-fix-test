@@ -4,7 +4,7 @@
 ARG VARIANT="focal"
 FROM mcr.microsoft.com/vscode/devcontainers/base:0-${VARIANT}
 
-ENV PATH=/frontbeforescript:$PATH:/backbeforeafterscript
+ENV PATH=/front-dockerfile-pre-script:$PATH:/back-dockerfile-pre-script
 ENV this_var=true
 
 # Add any install commands to install.sh or user-install.sh or and they'll be added to the image 
@@ -16,7 +16,7 @@ RUN ls /tmp/library-scripts/*.sh | xargs -n 1 bash \
     && apt-get clean -y && rm -rf /var/lib/apt/lists/* /tmp/library-scripts/ /tmp/scripts/
 
 ENV that_var=true
-ENV PATH=/frontafterscript:$PATH:/backafterscript
+ENV PATH=/front-dockerfile-post-script:$PATH:/back-dockerfile-post-script
 
 ENTRYPOINT [ "/usr/local/share/ssh-init.sh" ]
 CMD [ "sleep", "infinity" ]
