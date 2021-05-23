@@ -40,6 +40,7 @@ run_test() {
     fi
 }
 
+set -e
 run_test sh
 run_test bash
 run_test zsh

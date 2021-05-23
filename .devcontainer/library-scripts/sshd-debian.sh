@@ -85,6 +85,9 @@ sed -i -E "s/#*\s*Port\s+.+/Port ${SSHD_PORT}/g" /etc/ssh/sshd_config
 tee /usr/local/share/ssh-init.sh > /dev/null \
 << 'EOF'
 #!/usr/bin/env bash
+# This script is intended to be run as root with a container that runs as root (even if you connect with a different user)
+# However, it supports running as a user other than root if passwordless sudo is configured for that same user.
+
 set -e 
 
 sudoIf()
@@ -96,22 +99,29 @@ sudoIf()
     fi
 }
 
-# The files created here are used by /etc/profile.d/00-fix-login-env.sh.
+# ** The files created here are used by /etc/profile.d/00-fix-login-env.sh **
+# Store any variablese set in the dockerfile under /usr/local/etc/vscode-dev-containers/base-env
 sudoIf mkdir -p /usr/local/etc/vscode-dev-containers
-declare -x | grep -vE '(USER|HOME|SHELL|PWD|OLDPWD|TERM|TERM_PROGRAM|TERM_PROGRAM_VERSION|SHLVL|HOSTNAME|LOGNAME|MAIL)=' | grep -oP '(declare\s+-x\s+)?\K.*=.*' | sudoIf tee /usr/local/etc/vscode-dev-containers/base-env > /dev/null
-ETC_ENVIRONMENT_PATH="$(unset PATH; . /etc/environment; echo $PATH)"
+declare -x | grep -vE '(USER|HOME|SHELL|PWD|OLDPWD|TERM|TERM_PROGRAM|TERM_PROGRAM_VERSION|SHLVL|HOSTNAME|LOGNAME|MAIL)=' \
+    | grep -oP '(declare\s+-x\s+)?\K.*=.*' | sudoIf tee /usr/local/etc/vscode-dev-containers/base-env > /dev/null
+
+# Setup a /usr/local/etc/vscode-dev-containers/default-path file whose contents vary based on whether an /etc/environment file exists
+ETC_ENVIRONMENT_PATH="$(unset PATH; . /etc/environment; echo "$PATH")"
 if [ ! -z "${ETC_ENVIRONMENT_PATH}" ]; then
     # If a path is set in /etc/environment like in the ubuntu image, this will get used
     sudoIf tee /usr/local/etc/vscode-dev-containers/default-path > /dev/null \
+\
 << EOF_DEFAULT_PATH
-export __vscdc_default_path=${ETC_ENVIRONMENT_PATH}"
-export __vscdc_zshenv_path="$(PATH= /usr/bin/zsh --no-globalrcs --no-rcs -c 'echo \$PATH' 2>/dev/null)"
+export __vscdc_default_path="${ETC_ENVIRONMENT_PATH}"
+export __vscdc_zshenv_path="$(PATH= /usr/bin/zsh --no-globalrcs --no-rcs -c 'echo $PATH' 2>/dev/null)"
 EOF_DEFAULT_PATH
+
 else
     # If no path is in /etc/environment, get the default login paths from /etc/login.defs
     ENV_SUPATH="$(grep -oP 'ENV_SUPATH\s+PATH=\K.+$' /etc/login.defs)"
     ENV_PATH="$(grep -oP 'ENV_PATH\s+PATH=\K.+$' /etc/login.defs)"
     sudoIf tee /usr/local/etc/vscode-dev-containers/default-path > /dev/null \
+\
 << EOF_DEFAULT_PATH
 if [ "\$(id -u)" -ne 0 ]; then
     export __vscdc_default_path=$ENV_PATH
@@ -120,9 +130,10 @@ else
 fi
 export __vscdc_zshenv_path="$(PATH= /usr/bin/zsh --no-globalrcs --no-rcs -c 'echo $PATH' 2>/dev/null)"
 EOF_DEFAULT_PATH
+
 fi
 
-# Start SSH server
+# ** Start SSH server **
 sudoIf /etc/init.d/ssh start 2>&1 | sudoIf tee /tmp/sshd.log > /dev/null
 
 set +e
@@ -176,10 +187,11 @@ __vscdc_restore_env() {
                 local var_value="${variable_line##*=\"}"
                 export ${var_name}="${var_value%?}"
             fi
-        # Use EOF hack because <<< is not available in sh/dash/ash
-        done << EOF_BASE_ENV
+        done \
+<< EOF_BASE_ENV
 $base_env_vars
 EOF_BASE_ENV
+        # 👆 Use EOF hack for piping in variable to "read" because <<< is not available in sh/dash/ash
     fi
 
     # Unlike other properties, the starting PATH can get set in a few different ways. Debian sets it in /etc/profile while Ubuntu 
@@ -213,7 +225,9 @@ EOF_BASE_ENV
         fi
     fi
 }
+
 __vscdc_restore_env
+
 unset -f __vscdc_restore_env __vscdc_var_has_val
 unset __vscdc_shell_type __vscdc_default_path __vscdc_zshenv_path
 EOF

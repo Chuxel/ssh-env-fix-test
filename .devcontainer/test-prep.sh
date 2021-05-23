@@ -8,6 +8,7 @@ sed -i 's%if \[ -d /etc/profile\.d \]; then%export PATH=/front-pre-profile.d:$PA
 echo "export PATH=/front-profile-end:\$PATH:/back-profile-end" | tee -a /etc/zsh/zlogin >> /etc/profile
 echo "export PATH=/front-rc:\$PATH:/back-rc" | tee -a /etc/zsh/zshrc >> /etc/bash.bashrc
 
-echo -e "vscode\nvscode" | passwd vscode
+USERNAME="$(awk -v val=1000 -F ":" '$3==val{print $1}' /etc/passwd)"
+echo -e "vscode\nvscode" | passwd $USERNAME
 chown vscode /etc/profile.d/00-fix-login-env.sh /usr/local/share/ssh-init.sh
-chsh -s $(which $1) vscode
+chsh -s $(which $1) $USERNAME
