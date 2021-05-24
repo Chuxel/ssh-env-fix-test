@@ -1,15 +1,15 @@
 {
-	"name": "Test SSH script",
-	"overrideCommand": false,
-	"forwardPorts": [2222],
+	"name": "Test SSHD script",
 	"build": {
 		"dockerfile": "Dockerfile",
 		"args": { 
-			"FROM_IMAGE": "mcr.microsoft.com/vscode/devcontainers/base:0-focal",
+			"IMAGE_TO_TEST": "mcr.microsoft.com/vscode/devcontainers/base:0-focal",
 			"DEFAULT_SHELL_TYPE": "bash"
 		}
 	},
-	"remoteUser": "vscode",
-	
-	"userEnvProbe": "none"
+	"remoteUser": "vscode",	
+	"userEnvProbe": "none",
+
+	"overrideCommand": false,
+	"forwardPorts": [2222]
 }
