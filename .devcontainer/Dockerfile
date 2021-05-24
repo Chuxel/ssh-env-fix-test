@@ -5,7 +5,7 @@ ENV PATH=/front-dockerfile-pre-script:$PATH:/back-dockerfile-pre-script
 ENV this_var=true
 
 ARG DEFAULT_SHELL_TYPE=bash
-COPY sshd-debian.sh library-scripts/*.sh /tmp/scripts/
+COPY *.sh library-scripts/*.sh /tmp/scripts/
 RUN bash /tmp/scripts/sshd-debian.sh \
     && bash /tmp/scripts/test-prep.sh ${DEFAULT_SHELL_TYPE}
 
