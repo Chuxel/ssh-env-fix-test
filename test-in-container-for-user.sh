@@ -3,6 +3,10 @@ USERNAME=${1:-$(whoami)}
 RUN_CODESPACES_TESTS=${2:-false}
 set -e
 
+# Work around wierdness with $HOME in images where this is set by something else
+if [ "${USERNAME}" = "root" ]; then
+    HOME="/root"
+fi
 if [ ! -f $HOME/.ssh/test.id_rsa ]; then
     mkdir -p $HOME/.ssh
     chmod 700 $HOME/.ssh
