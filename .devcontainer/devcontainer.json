@@ -3,7 +3,7 @@
 	"build": {
 		"dockerfile": "Dockerfile",
 		"args": { 
-			"IMAGE_TO_TEST": "mcr.microsoft.com/vscode/devcontainers/base:0-focal",
+			"IMAGE_TO_TEST": "mcr.microsoft.com/vscode/devcontainers/base:ubuntu",
 			"DEFAULT_SHELL_TYPE": "bash"
 		}
 	},
