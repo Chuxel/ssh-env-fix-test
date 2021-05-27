@@ -96,45 +96,47 @@ __update_environment() {
     # Augment BASE_ENV_VARs with anything in ETC_ENV_VARS
     while IFS= read -r variable_line; do
         VAR_NAME="${variable_line%%=*}"
-        if [ "${VAR_NAME}" != "" ]; then
-            if ! echo "${BASE_ENV_VARS}" | grep "${VAR_NAME}=" > /dev/null 2>&1; then
-                BASE_ENV_VARS="$variable_line\n${BASE_ENV_VARS}"
-            fi
-            if [ "${VAR_NAME}" = "PATH" ]; then
-                VAR_VAL="${variable_line##*=\"}"
-                BASE_ENV_PATH="${VAR_VAL%?}"
-            fi
+        if [ "${VAR_NAME}" != "" ] && ! echo "${BASE_ENV_VARS}" | grep "${VAR_NAME}=" > /dev/null 2>&1; then
+            BASE_ENV_VARS="$variable_line\n${BASE_ENV_VARS}"
         fi
     done <<< "${ETC_ENV_VARS}"
-    echo -e "${BASE_ENV_VARS}" | sudoIf tee /etc/environment
+    echo -e "${BASE_ENV_VARS}" | sudoIf tee /etc/environment > /dev/null
 
-    # Add secrets to /etc/environment
-    if [ -f /workspaces/.codespaces/shared/.user-secrets.json ]; then
-        SECRET_ENV_VARS="$(cat /workspaces/.codespaces/shared/.user-secrets.json | jq -r '.[] | select (.type=="EnvironmentVariable") | .name+"=\""+.value+"\""')"
-        echo "${SECRET_ENV_VARS}" | sudoIf tee -a /etc/environment > /dev/null
+    # Wire in codespaces secret processing to zsh if present (since may have been added to image after script was run)
+    if [ -f  /etc/zsh/zlogin ] && ! grep '/etc/profile.d/00-restore-secrets.sh' /etc/zsh/zlogin > /dev/null 2>&1; then
+        echo -e "if [ -f /etc/profile.d/00-restore-secrets.sh ]; then . /etc/profile.d/00-restore-secrets.sh; fi\n$(cat /etc/zsh/zlogin 2>/dev/null || echo '')" | sudoIf tee /etc/zsh/zlogin > /dev/null
+    fi
+
+    # Handle PATH hard coding in /etc/profile or /etc/zshenv
+    QUOTE_ESCAPED_PATH="${PATH//\"/\\\"}"
+    SED_ESCAPTED_PATH="${QUOTE_ESCAPED_PATH//\\%/\\\%}"
+    sudoIf sed -i -E "s%((^|\s)PATH=)([^\$]*)$%\2PATH=\"${SED_ESCAPTED_PATH:-\3}\"%" /etc/profile
+    if [ -f /etc/zsh/zshenv ]; then
+        sudoIf sed -i -E "s%((^|\s)PATH=)([^\$]*)$%\2PATH=\"${SED_ESCAPTED_PATH:-\3}\"%" /etc/zsh/zshenv
     fi
 
     # Remove less complex scipt if present to avoid duplication
     if [ -f "/etc/profile.d/00-restore-env.sh" ]; then
         sudoIf rm -f /etc/profile.d/00-restore-env.sh
     fi
-
-    # Handle PATH hard coding in /etc/profile or /etc/zshenv
-    QUOTE_ESCAPED_PATH="${BASE_ENV_PATH//\"/\\\"}"
-    SED_ESCAPTED_PATH="${QUOTE_ESCAPED_PATH//\\%/\\\%}"
-    sudoIf sed -i -E "s%((^|\s)PATH=)([^\$]*)$%\2PATH=\"${SED_ESCAPTED_PATH:-\3}\"%" /etc/profile
-    if type zsh > /dev/null 2>&1; then
-        if ! grep '/etc/profile.d/00-fix-login-env.sh' /etc/zsh/zlogin > /dev/null 2>&1; then
-            echo -e "if [ -f /etc/profile.d/00-fix-login-env.sh ]; then . /etc/profile.d/00-fix-login-env.sh; fi\n$(cat /etc/zsh/zlogin 2>/dev/null || echo '')" | sudoIf tee /etc/zsh/zlogin > /dev/null
-        fi
-        if [ -f /etc/zsh/zshenv ]; then
-            sudoIf sed -i -E "s%((^|\s)PATH=)([^\$]*)$%\2PATH=\"${SED_ESCAPTED_PATH:-\3}\"%" /etc/zsh/zshenv
-        fi
-    fi
 }
 
-((__update_environment) &)
+((__update_environment ) &)
 
+EOF
+)"
+
+# Script to ensure login shells get the latest Codespaces secrets
+RESTORE_SECRETS_SCRIPT="$(cat << 'EOF'
+#!/bin/sh
+if [ "${CODESPACES}" != "true" ] || [ "${VSCDC_FIXED_SECRETS}" = "true" ]; then
+    # Already run, so exit
+    return
+fi
+if [ -f /workspaces/.codespaces/shared/.user-secrets.json ]; then
+   $(cat /workspaces/.codespaces/shared/.user-secrets.json | jq -r '.[] | select (.type=="EnvironmentVariable") | "export "+.name+"=\""+.value+"\""')
+fi
+export VSCDC_FIXED_SECRETS=true
 EOF
 )"
 
@@ -159,6 +161,15 @@ sudoIf()
 EOF
 if [ "${FIX_ENVIRONMENT}" = "true" ]; then
     echo "$STORE_ENV_SCRIPT" >> /usr/local/share/ssh-init.sh
+    echo "${RESTORE_SECRETS_SCRIPT}" > /etc/profile.d/00-restore-secrets.sh
+    chmod +x /etc/profile.d/00-restore-secrets.sh
+    # Remove less complex script if present to avoid path duplication
+    rm -f /etc/profile.d/00-restore-env.sh
+    # Wire in zsh if present
+    if type zsh > /dev/null 2>&1; then
+        echo -e "if [ -f /etc/profile.d/00-restore-secrets.sh ]; then . /etc/profile.d/00-restore-secrets.sh; fi\n$(cat /etc/zsh/zlogin 2>/dev/null || echo '')" > /etc/zsh/zlogin
+    fi
+
 fi
 tee -a /usr/local/share/ssh-init.sh > /dev/null \
 << 'EOF'
