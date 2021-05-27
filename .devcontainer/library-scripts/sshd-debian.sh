@@ -83,10 +83,10 @@ sed -i -E "s/#*\s*Port\s+.+/Port ${SSHD_PORT}/g" /etc/ssh/sshd_config
 
 # Script to store variables that exist at the time the ENTRYPOINT is fired
 STORE_ENV_SCRIPT="$(cat << 'EOF'
-# Update default env - Need to do this here because its unclear where the ssh script was run in the Dockerfile.
-# Unlike macOS and Windows, nearly everything is legal in file/path names so we need to do some escaping. We then
-# need to modify /etc/environment and possibly /etc/profile and /etc/zsh/zshenv due to PATH hard coding in certain imges.
-if [ ! -f /usr/local/etc/vscode-dev-containers/env-restored ]; then
+__update_environment() {
+    # Update default env - Need to do this here because its unclear where the ssh script was run in the Dockerfile.
+    # Unlike macOS and Windows, nearly everything is legal in file/path names so we need to do some escaping. We then
+    # need to modify /etc/environment and possibly /etc/profile and /etc/zsh/zshenv due to PATH hard coding in certain imges.
     # Remove user/context specific default vars:
     # - https://ss64.com/bash/syntax-variables.html#:~:text=Default%20Shell%20Variables
     # - https://zsh.sourceforge.io/Doc/Release/Parameters.html
@@ -102,13 +102,22 @@ if [ ! -f /usr/local/etc/vscode-dev-containers/env-restored ]; then
             fi
             if [ "${VAR_NAME}" = "PATH" ]; then
                 VAR_VAL="${variable_line##*=\"}"
-                VAR_VAL="${VAR_VAL%?}"
-                BASE_ENV_PATH="${VAR_VAL}"
+                BASE_ENV_PATH="${VAR_VAL%?}"
             fi
         fi
     done <<< "${ETC_ENV_VARS}"
     echo -e "${BASE_ENV_VARS}" | sudoIf tee /etc/environment
-    sudoIf touch /usr/local/etc/vscode-dev-containers/env-restored
+
+    # Add secrets to /etc/environment
+    if [ -f /workspaces/.codespaces/shared/.user-secrets.json ]; then
+        SECRET_ENV_VARS="$(cat /workspaces/.codespaces/shared/.user-secrets.json | jq -r '.[] | select (.type=="EnvironmentVariable") | .name+"=\""+.value+"\""')"
+        echo "${SECRET_ENV_VARS}" | sudoIf tee -a /etc/environment > /dev/null
+    fi
+
+    # Remove less complex scipt if present to avoid duplication
+    if [ -f "/etc/profile.d/00-restore-env.sh" ]; then
+        sudoIf rm -f /etc/profile.d/00-restore-env.sh
+    fi
 
     # Handle PATH hard coding in /etc/profile or /etc/zshenv
     QUOTE_ESCAPED_PATH="${BASE_ENV_PATH//\"/\\\"}"
@@ -122,66 +131,10 @@ if [ ! -f /usr/local/etc/vscode-dev-containers/env-restored ]; then
             sudoIf sed -i -E "s%((^|\s)PATH=)([^\$]*)$%\2PATH=\"${SED_ESCAPTED_PATH:-\3}\"%" /etc/zsh/zshenv
         fi
     fi
-
-    # Remove less complex scipt if present to avoid duplication
-    if [ -f "/etc/profile.d/00-restore-env.sh" ]; then
-        sudoIf rm -f /etc/profile.d/00-restore-env.sh
-    fi
-fi
-
-EOF
-)"
-
-# Script to ensure login shells get variables or the PATH that were set in the container image
-RESTORE_ENV_SCRIPT="$(cat << 'EOF'
-#!/bin/sh
-# This script is intended to be sourced, so it uses posix syntax where possible and detects zsh/sh for cases where things differ
-
-if [ "${CODESPACES}" != "true" ] || [ "${VSCDC_FIX_LOGIN_ENV}" = "true" ]; then
-    return
-fi
-
-export VSCDC_FIX_LOGIN_ENV=true
-
-# Get the type of shell without relying on $SHELL which can be empty/wrong
-__vscdc_shell_type="$(lsof -p $$ | awk '(NR==2) {print $1}')"
-
-__vscdc_var_has_val() {
-    # POSIX implementation uses eval, but that doesn't work in zsh and -v is better for bash
-    if [ "${__vscdc_shell_type}" = "bash" ] || [ "${__vscdc_shell_type}" = "zsh" ]; then
-        if [ -v "$1" ]; then return 0; else return 1; fi
-    fi
-    if [ "$(eval "echo \$$1")" = "" ]; then return 1; else return 0; fi
 }
 
-__vscdc_restore_secrets() {
-    local secret_env_vars
-    # Grab codespaces secrets if present
-    if [ -f /workspaces/.codespaces/shared/.user-secrets.json ]; then
-        secret_env_vars="$(cat /workspaces/.codespaces/shared/.user-secrets.json | jq -r '.[] | select (.type=="EnvironmentVariable") | .name+"=\""+.value+"\""')"
-        if [ ! -z "${secret_env_vars}" ]; then
-            # Add any missing env vars saved off earlier
-            local variable_line
-            while IFS= read -r variable_line; do
-                local var_name="${variable_line%%=*}"
-                if [ "${var_name}" != "PATH" ] && [ "${var_name}" != "" ] && ! __vscdc_var_has_val "${var_name}"; then
-                    # All values are quoted, so get everything past the first quote and remove the last
-                    local var_value="${variable_line##*=\"}"
-                    export ${var_name}="${var_value%?}"
-                fi
-            done \
-<< EOF_BASE_ENV
-$secret_env_vars
-EOF_BASE_ENV
-# 👆 Use EOF hack for piping in variable to "read" because <<< is not available in sh/dash/ash
-        fi
-    fi
-}
+((__update_environment) &)
 
-__vscdc_restore_secrets
-
-unset -f __vscdc_restore_secrets __vscdc_var_has_val
-unset __vscdc_shell_type
 EOF
 )"
 
@@ -206,14 +159,6 @@ sudoIf()
 EOF
 if [ "${FIX_ENVIRONMENT}" = "true" ]; then
     echo "$STORE_ENV_SCRIPT" >> /usr/local/share/ssh-init.sh
-    echo "${RESTORE_ENV_SCRIPT}" > /etc/profile.d/00-fix-login-env.sh
-    chmod +x /etc/profile.d/00-fix-login-env.sh
-    # Remove less complex script if present to avoid path duplication
-    rm -f /etc/profile.d/00-restore-env.sh
-    # Wire in zsh if present
-    if type zsh > /dev/null 2>&1; then
-        echo -e "if [ -f /etc/profile.d/00-fix-login-env.sh ]; then . /etc/profile.d/00-fix-login-env.sh; fi\n$(cat /etc/zsh/zlogin 2>/dev/null || echo '')" > /etc/zsh/zlogin
-    fi
 fi
 tee -a /usr/local/share/ssh-init.sh > /dev/null \
 << 'EOF'
