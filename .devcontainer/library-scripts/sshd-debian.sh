@@ -87,7 +87,11 @@ STORE_ENV_SCRIPT="$(cat << 'EOF'
 # Unlike macOS and Windows, nearly everything is legal in file/path names so we need to do some escaping. We then
 # need to modify /etc/environment and possibly /etc/profile and /etc/zsh/zshenv due to PATH hard coding in certain imges.
 if [ ! -f /usr/local/etc/vscode-dev-containers/env-restored ]; then
-    BASE_ENV_VARS="$(declare -x | grep -vE '(USER|HOME|SHELL|PWD|OLDPWD|TERM|TERM_PROGRAM|TERM_PROGRAM_VERSION|SHLVL|HOSTNAME|LOGNAME|MAIL|_)='| grep -oP '(declare\s+-x\s+)?\K.*=.*')"
+    # Remove user/context specific default vars:
+    # - https://ss64.com/bash/syntax-variables.html#:~:text=Default%20Shell%20Variables
+    # - https://zsh.sourceforge.io/Doc/Release/Parameters.html
+    VARS_TO_FILTER_OUT='USER|USERNAME|GROUPS|HOME|SHELL|SHELLOPTS|HOST|HOSTNAME|IFS|FUNCNAME|FUNCNEST|OPTARG|OPTIND|OPTERR|OSTYPE|MACHTYPE|CPUTYPE|PPID|TTY|TTYIDLE|TRY_BLOCK_ERROR|TRY_BLOCK_INTERRUPT|PIPESTATUS|RANDOM|SECONDS|COMP_WORDS|COMP_CWORD|COMP_LINE|COMP_POINT|COMPREPLY|DIRSTACK|PWD|OLDPWD|TERM|TERMINFO|TERMINFO_DIRS|TERM_PROGRAM|TERM_PROGRAM_VERSION|COLORTERM|SHLVL|LOGNAME|MAIL|MAILPATH|MAILCHECK|BASH|BASH_ENV|BASH_VERSION|BASH_VERSINFO|UID|GID|EUID|EGID|LINENO|CDPATH|VENDOR|ZSH|ZSH_ARGZERO|ZSH_EXECUTION_STRING|ZSH_NAME|ZSH_PATCHLEVEL|ZSH_SCRIPT|ZSH_SUBSHELL|ZSH_VERSION|ENV'
+    BASE_ENV_VARS="$(declare -x +r +f | grep -vE "(${VARS_TO_FILTER_OUT})="| grep -oP '(declare\s+-x\s+)?\K.*=.*')"
     ETC_ENV_VARS="$(cat /etc/environment 2>/dev/null || echo '')"
     # Augment BASE_ENV_VARs with anything in ETC_ENV_VARS
     while IFS= read -r variable_line; do

@@ -14,8 +14,8 @@ sed -i 's%if \[ -d /etc/profile\.d \]; then%export PATH=/front-pre-profile.d:$PA
 echo "export PATH=/front-profile-end:\$PATH:/back-profile-end" | tee -a /etc/zsh/zlogin >> /etc/profile
 echo "export PATH=/front-rc:\$PATH:/back-rc" | tee -a /etc/zsh/zshrc >> /etc/bash.bashrc
 echo "etc_env_var=true" >> /etc/environment
-echo "HOME=/invalid/place" >> /etc/environment
 echo "PWD=/invalid/place" >> /etc/environment
+echo "_=/invalid/place" >> /etc/environment
 
 echo -e "vscode\nvscode" | passwd root 2>&1
 USERNAME="$(awk -v val=1000 -F ":" '$3==val{print $1}' /etc/passwd 2>/dev/null)"
