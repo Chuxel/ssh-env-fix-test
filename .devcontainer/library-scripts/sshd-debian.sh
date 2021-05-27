@@ -83,45 +83,41 @@ sed -i -E "s/#*\s*Port\s+.+/Port ${SSHD_PORT}/g" /etc/ssh/sshd_config
 
 # Script to store variables that exist at the time the ENTRYPOINT is fired
 STORE_ENV_SCRIPT="$(cat << 'EOF'
-__update_environment() {
-    # Update default env - Need to do this here because its unclear where the ssh script was run in the Dockerfile.
-    # Unlike macOS and Windows, nearly everything is legal in file/path names so we need to do some escaping. We then
-    # need to modify /etc/environment and possibly /etc/profile and /etc/zsh/zshenv due to PATH hard coding in certain imges.
-    # Remove user/context specific default vars:
-    # - https://ss64.com/bash/syntax-variables.html#:~:text=Default%20Shell%20Variables
-    # - https://zsh.sourceforge.io/Doc/Release/Parameters.html
-    VARS_TO_FILTER_OUT='USER|USERNAME|GROUPS|HOME|SHELL|SHELLOPTS|HOST|HOSTNAME|IFS|FUNCNAME|FUNCNEST|OPTARG|OPTIND|OPTERR|OSTYPE|MACHTYPE|CPUTYPE|PPID|TTY|TTYIDLE|TRY_BLOCK_ERROR|TRY_BLOCK_INTERRUPT|PIPESTATUS|RANDOM|SECONDS|COMP_WORDS|COMP_CWORD|COMP_LINE|COMP_POINT|COMPREPLY|DIRSTACK|PWD|OLDPWD|TERM|TERMINFO|TERMINFO_DIRS|TERM_PROGRAM|TERM_PROGRAM_VERSION|COLORTERM|SHLVL|LOGNAME|MAIL|MAILPATH|MAILCHECK|BASH|BASH_ENV|BASH_VERSION|BASH_VERSINFO|UID|GID|EUID|EGID|LINENO|CDPATH|VENDOR|ZSH|ZSH_ARGZERO|ZSH_EXECUTION_STRING|ZSH_NAME|ZSH_PATCHLEVEL|ZSH_SCRIPT|ZSH_SUBSHELL|ZSH_VERSION|ENV'
-    BASE_ENV_VARS="$(declare -x +r +f | grep -vE "(${VARS_TO_FILTER_OUT})="| grep -oP '(declare\s+-x\s+)?\K.*=.*')"
-    ETC_ENV_VARS="$(cat /etc/environment 2>/dev/null || echo '')"
-    # Augment BASE_ENV_VARs with anything in ETC_ENV_VARS
-    while IFS= read -r variable_line; do
-        VAR_NAME="${variable_line%%=*}"
-        if [ "${VAR_NAME}" != "" ] && ! echo "${BASE_ENV_VARS}" | grep "${VAR_NAME}=" > /dev/null 2>&1; then
-            BASE_ENV_VARS="$variable_line\n${BASE_ENV_VARS}"
-        fi
-    done <<< "${ETC_ENV_VARS}"
-    echo -e "${BASE_ENV_VARS}" | sudoIf tee /etc/environment > /dev/null
-
-    # Wire in codespaces secret processing to zsh if present (since may have been added to image after script was run)
-    if [ -f  /etc/zsh/zlogin ] && ! grep '/etc/profile.d/00-restore-secrets.sh' /etc/zsh/zlogin > /dev/null 2>&1; then
-        echo -e "if [ -f /etc/profile.d/00-restore-secrets.sh ]; then . /etc/profile.d/00-restore-secrets.sh; fi\n$(cat /etc/zsh/zlogin 2>/dev/null || echo '')" | sudoIf tee /etc/zsh/zlogin > /dev/null
+# Update default env - Need to do this here because its unclear where the ssh script was run in the Dockerfile.
+# Unlike macOS and Windows, nearly everything is legal in file/path names so we need to do some escaping. We then
+# need to modify /etc/environment and possibly /etc/profile and /etc/zsh/zshenv due to PATH hard coding in certain imges.
+# Remove user/context specific default vars:
+# - https://ss64.com/bash/syntax-variables.html#:~:text=Default%20Shell%20Variables
+# - https://zsh.sourceforge.io/Doc/Release/Parameters.html
+VARS_TO_FILTER_OUT='USER|USERNAME|GROUPS|HOME|SHELL|SHELLOPTS|HOST|HOSTNAME|IFS|FUNCNAME|FUNCNEST|OPTARG|OPTIND|OPTERR|OSTYPE|MACHTYPE|CPUTYPE|PPID|TTY|TTYIDLE|TRY_BLOCK_ERROR|TRY_BLOCK_INTERRUPT|PIPESTATUS|RANDOM|SECONDS|COMP_WORDS|COMP_CWORD|COMP_LINE|COMP_POINT|COMPREPLY|DIRSTACK|PWD|OLDPWD|TERM|TERMINFO|TERMINFO_DIRS|TERM_PROGRAM|TERM_PROGRAM_VERSION|COLORTERM|SHLVL|LOGNAME|MAIL|MAILPATH|MAILCHECK|BASH|BASH_ENV|BASH_VERSION|BASH_VERSINFO|UID|GID|EUID|EGID|LINENO|CDPATH|VENDOR|ZSH|ZSH_ARGZERO|ZSH_EXECUTION_STRING|ZSH_NAME|ZSH_PATCHLEVEL|ZSH_SCRIPT|ZSH_SUBSHELL|ZSH_VERSION|ENV'
+BASE_ENV_VARS="$(declare -x +r +f | grep -vE "(${VARS_TO_FILTER_OUT})="| grep -oP '(declare\s+-x\s+)?\K.*=.*')"
+ETC_ENV_VARS="$(cat /etc/environment 2>/dev/null || echo '')"
+# Augment BASE_ENV_VARs with anything in ETC_ENV_VARS
+while IFS= read -r variable_line; do
+    VAR_NAME="${variable_line%%=*}"
+    if [ "${VAR_NAME}" != "" ] && ! echo "${BASE_ENV_VARS}" | grep "${VAR_NAME}=" > /dev/null 2>&1; then
+        BASE_ENV_VARS="$variable_line\n${BASE_ENV_VARS}"
     fi
+done <<< "${ETC_ENV_VARS}"
+echo -e "${BASE_ENV_VARS}" | sudoIf tee /etc/environment > /dev/null
 
-    # Handle PATH hard coding in /etc/profile or /etc/zshenv
-    QUOTE_ESCAPED_PATH="${PATH//\"/\\\"}"
-    SED_ESCAPTED_PATH="${QUOTE_ESCAPED_PATH//\\%/\\\%}"
-    sudoIf sed -i -E "s%((^|\s)PATH=)([^\$]*)$%\2PATH=\"${SED_ESCAPTED_PATH:-\3}\"%" /etc/profile
-    if [ -f /etc/zsh/zshenv ]; then
-        sudoIf sed -i -E "s%((^|\s)PATH=)([^\$]*)$%\2PATH=\"${SED_ESCAPTED_PATH:-\3}\"%" /etc/zsh/zshenv
-    fi
+# Wire in codespaces secret processing to zsh if present (since may have been added to image after script was run)
+if [ -f  /etc/zsh/zlogin ] && ! grep '/etc/profile.d/00-restore-secrets.sh' /etc/zsh/zlogin > /dev/null 2>&1; then
+    echo -e "if [ -f /etc/profile.d/00-restore-secrets.sh ]; then . /etc/profile.d/00-restore-secrets.sh; fi\n$(cat /etc/zsh/zlogin 2>/dev/null || echo '')" | sudoIf tee /etc/zsh/zlogin > /dev/null
+fi
 
-    # Remove less complex scipt if present to avoid duplication
-    if [ -f "/etc/profile.d/00-restore-env.sh" ]; then
-        sudoIf rm -f /etc/profile.d/00-restore-env.sh
-    fi
-}
+# Handle PATH hard coding in /etc/profile or /etc/zshenv
+QUOTE_ESCAPED_PATH="${PATH//\"/\\\"}"
+SED_ESCAPTED_PATH="${QUOTE_ESCAPED_PATH//\\%/\\\%}"
+sudoIf sed -i -E "s%((^|\s)PATH=)([^\$]*)$%\2PATH=\"${SED_ESCAPTED_PATH:-\3}\"%" /etc/profile
+if [ -f /etc/zsh/zshenv ]; then
+    sudoIf sed -i -E "s%((^|\s)PATH=)([^\$]*)$%\2PATH=\"${SED_ESCAPTED_PATH:-\3}\"%" /etc/zsh/zshenv
+fi
 
-((__update_environment ) &)
+# Remove less complex scipt if present to avoid duplication
+if [ -f "/etc/profile.d/00-restore-env.sh" ]; then
+    sudoIf rm -f /etc/profile.d/00-restore-env.sh
+fi
 
 EOF
 )"
