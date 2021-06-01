@@ -70,16 +70,20 @@ fi
 # If new password not set to skip, set it for the specified user
 if [ "${NEW_PASSWORD}" != "skip" ]; then
     echo "${USERNAME}:${NEW_PASSWORD}" | chpasswd
-    if [ "${NEW_PASSWORD}" != "root" ]; then
-        usermod -aG ssh ${USERNAME}
-    fi
+fi
+
+# Add user to ssh group
+if [ "${USERNAME}" != "root" ]; then
+    usermod -aG ssh ${USERNAME}
 fi
 
 # Setup sshd
 mkdir -p /var/run/sshd
-sed -i 's/session\s*required\s*pam_loginuid\.so/ession optional pam_loginuid.so/g' /etc/pam.d/sshd
+sed -i 's/session\s*required\s*pam_loginuid\.so/session optional pam_loginuid.so/g' /etc/pam.d/sshd
 sed -i 's/#*PermitRootLogin prohibit-password/PermitRootLogin yes/g' /etc/ssh/sshd_config
 sed -i -E "s/#*\s*Port\s+.+/Port ${SSHD_PORT}/g" /etc/ssh/sshd_config
+# Need to UsePAM so /etc/environment is processed
+sed -i -E "s/#?\s*UsePAM\s+.+/UsePAM yes/g" /etc/ssh/sshd_config
 
 # Script to store variables that exist at the time the ENTRYPOINT is fired
 STORE_ENV_SCRIPT="$(cat << 'EOF'
